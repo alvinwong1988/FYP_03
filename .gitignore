@@ -1,0 +1,26 @@
+# Project-specific directories
+dataset/
+Final/
+Project/
+static/
+
+# Virtual environment
+venv/
+
+# File types to ignore
+*.csv
+*.json
+
+# Python-specific ignores
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
