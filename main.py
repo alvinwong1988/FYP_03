@@ -1,5 +1,6 @@
 from flask import Flask, request, render_template, redirect, url_for, Response, jsonify
 from werkzeug.utils import secure_filename
+from dotenv import load_dotenv
 import os
 import cv2
 import numpy as np
@@ -13,8 +14,11 @@ from email import encoders
 import ssl
 import base64
 import logging
-import datetime
+from datetime import datetime
 import requests
+
+# Load environment variables from .env file
+load_dotenv()
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'static/uploads/'
@@ -78,93 +82,117 @@ def camera_feed():
                     mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
-def send_email(subject, body, attachment=None):
+def get_salesforce_access_token(client_id, client_secret, username, password, security_token=None, instance_url='https://login.salesforce.com'):
+    """
+    Retrieve a Bearer access token from Salesforce using OAuth 2.0 Username-Password Flow.
+    
+    Parameters:
+    - client_id (str): Consumer Key from Salesforce Connected App.
+    - client_secret (str): Consumer Secret from Salesforce Connected App.
+    - username (str): Salesforce username (e.g., user@domain.com).
+    - password (str): Salesforce password.
+    - security_token (str, optional): Security token for the user (if required by org settings).
+    - instance_url (str, optional): Salesforce instance URL (default is production login URL).
+    
+    Returns:
+    - str: Access token (Bearer token) if successful.
+    - None: If authentication fails, returns None and prints error.
+    """
     try:
-        # Define our SMTP email server details
-        smtp_server = "smtp.gmail.com"
-        port = 587  # For starttls
-        username = ""
-        password = ""
-
-        # Create a secure SSL context
-        context = ssl.create_default_context()
-
-        # Try to log in to server and send email
-        server = smtplib.SMTP(smtp_server, port)
-        server.ehlo()  # Can be omitted
-        server.starttls(context=context)  # Secure the connection
-        server.ehlo()  # Can be omitted
-        server.login(username, password)
-
-        msg = MIMEMultipart()
-        msg['From'] = username
-        msg['To'] = 'winggoldgoldgold@S@gmail.com'
-        #msg['To'] = 'mehedihasannirobcsediu@gmail.com'
-        #msg['To'] = 'jubayermahmud12345@gmail.com'
-        msg['Subject'] = subject
-        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        # Get the location
-        response = requests.get('https://ipinfo.io')
+        # Construct the full password (append security token if provided)
+        full_password = password
+        if security_token:
+            full_password += security_token
+        
+        # OAuth 2.0 endpoint for token request
+        token_url = f"{instance_url}/services/oauth2/token"
+        
+        # Payload for Username-Password Flow
+        payload = {
+            'grant_type': 'password',
+            'client_id': client_id,
+            'client_secret': client_secret,
+            'username': username,
+            'password': full_password
+        }
+        
+        # Send POST request to get access token
+        response = requests.post(token_url, data=payload)
+        
+        # Check if request was successful
         if response.status_code == 200:
-            data = response.json()
-            location = f"{data.get('city', 'Unknown city')}, {data.get('region', 'Unknown region')}"
+            token_data = response.json()
+            access_token = token_data.get('access_token')
+            print("Successfully retrieved Salesforce access token.")
+            return access_token
         else:
-            location = 'Unknown'
-
-        # Create the email body
-        body = (f'Dear Author,\n\nViolence Deteced at {current_time}.\nThe location is: {location}. \n\n'
-                f'Please take an action.The current situation given bellow: ')
-
-        msg.attach(MIMEText(body, 'plain'))
-
-        if attachment is not None:
-            _, img_encoded = cv2.imencode('.jpg', attachment, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-            img_as_bytes = img_encoded.tobytes()
-
-            img_part = MIMEBase('image', "jpeg")
-            img_part.set_payload(img_as_bytes)
-            encoders.encode_base64(img_part)
-
-            img_part.add_header('Content-Disposition', 'attachment', filename='detected_frame.jpg')
-            msg.attach(img_part)
-
-        server.send_message(msg)
-        server.quit()
-
-        logging.info('Email sent.')
+            print(f"Failed to retrieve Salesforce access token: {response.status_code} - {response.text}")
+            return None
+            
     except Exception as e:
-        logging.error(f'Error sending email: {str(e)}')
+        print(f"Error retrieving Salesforce access token: {str(e)}")
+        return None
+
 def send_notification_to_salesforce(frame):
     """
-    Function to send notification to Salesforce or another system.
-    This is a placeholder; replace with actual API integration.
+    Function to send a violence detection notification to Salesforce using a custom REST API endpoint.
+    The frame is encoded as a base64 string and sent as part of the request.
     """
     try:
-        # Example: Prepare data to send to Salesforce
-        current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # Get Salesforce credentials and configuration from environment variables
+        client_id = os.getenv('SF_CLIENT_ID')
+        client_secret = os.getenv('SF_CLIENT_SECRET')
+        username = os.getenv('SF_USERNAME')
+        password = os.getenv('SF_PASSWORD')
+        security_token = os.getenv('SF_SECURITY_TOKEN')
+        instance_url = os.getenv('SF_INSTANCE_URL', 'https://login.salesforce.com')
+        
+        # Get access token for Salesforce API
+        access_token = get_salesforce_access_token(client_id, client_secret, username, password, security_token, instance_url)
+        
+        if not access_token:
+            print("Cannot send notification: No access token available.")
+            return False
+        
+        # Prepare data for the custom Salesforce API endpoint
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")   # Format as ISO with timezone
+        #current_time = datetime.now()
+
         incident_data = {
-            "timestamp": current_time,
-            "location": get_location(),  # Function to get location (as in your code)
-            "description": "Violence detected in video feed.",
+            "Carema": "C0003",  # Replace with dynamic camera ID if needed
+            "IssueDateTime": current_time,
+            "Location": "",  # Replace with dynamic location if available
+            "Origin": "Web",
+            "Description": "Violence action was detected",
+            "Account": "Dickenson plc",  # Replace with relevant Account name if needed
             "frame": base64.b64encode(cv2.imencode('.jpg', frame)[1].tobytes()).decode('utf-8')  # Encode frame as base64
         }
         
-        # Placeholder for actual Salesforce API call
-        # Example: Use 'requests' to send data to Salesforce API endpoint
-        salesforce_endpoint = "https://your-salesforce-instance/services/data/vXX.0/sobjects/Case"
+        # Salesforce custom REST API endpoint for ViolenceCase
+        salesforce_endpoint = f"{instance_url}/services/apexrest/ViolenceCase/"
         headers = {
-            "Authorization": "Bearer your_access_token",
+            "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
         }
+        
+        # Send POST request to Salesforce
         response = requests.post(salesforce_endpoint, json=incident_data, headers=headers)
         
-        if response.status_code == 201:
+        # Check response status
+        if response.status_code == 200:
             print("Notification sent to Salesforce successfully.")
+            response_data = response.json()
+            case_number = response_data.get("caseNumber", "N/A")
+            print(f"Case Number: {case_number}")
+            return True
         else:
-            print(f"Failed to send notification to Salesforce: {response.text}")
+            print(f"Failed to send notification to Salesforce. Status Code: {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+            
     except Exception as e:
         print(f"Error sending notification to Salesforce: {str(e)}")
+        return False
 
 def generate_frames(video_path):
     try:
@@ -196,7 +224,7 @@ def generate_frames(video_path):
 
     # Violence detection criteria
     VIOLENCE_CONFIDENCE_THRESHOLD = 0.7  # Minimum confidence for violence detection
-    VIOLENCE_FRAME_THRESHOLD = 10  # Number of consecutive frames with violence
+    VIOLENCE_FRAME_THRESHOLD = 20  # Number of consecutive frames with violence
     COOLDOWN_PERIOD_SECONDS = 300  # 5 minutes cooldown after a notification
 
     # Initialize video capture based on input
@@ -248,14 +276,15 @@ def generate_frames(video_path):
             text = f"{predicted_class_name}: {predicted_confidence:.2%}"
             cv2.putText(frame, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0) if predicted_class_name == "NonViolence" else (0, 0, 255), 2)
         # Handle alert logic (if applicable)
-        current_time = datetime.datetime.now()
+        current_time = datetime.now()
+
         if predicted_class_name == "Violence" and predicted_confidence > VIOLENCE_CONFIDENCE_THRESHOLD:
             violence_count += 1
             if violence_count >= VIOLENCE_FRAME_THRESHOLD:
                 # Check if enough time has passed since the last notification
                 if last_notification_time is None or (current_time - last_notification_time).total_seconds() > COOLDOWN_PERIOD_SECONDS:
                     print("Violence detected consistently! Sending notification...")
-                    #send_notification_to_salesforce(frame)  # Function to send data to Salesforce
+                    send_notification_to_salesforce(frame)  # Function to send data to Salesforce
                     last_notification_time = current_time
                 violence_count = VIOLENCE_FRAME_THRESHOLD  # Cap the counter to avoid overflow
         else:
